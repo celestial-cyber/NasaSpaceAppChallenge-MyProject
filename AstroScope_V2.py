@@ -7,6 +7,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
+from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -21,10 +22,9 @@ Use the filters and input section to interactively explore the dataset.
 # --- 1. Load Data ---
 @st.cache_data
 def load_data():
-    df = pd.read_csv("C:\\Users\\Dell\\OneDrive\\Desktop\\Project AstroScope\\KeplerExoplanetsDataset.csv")
+    df = pd.read_csv("C:\\Users\\Dell\\OneDrive\\Desktop\\NasaSpaceAppChallenge-MyProject\\KeplerExoplanetsDataset.csv")
     df['koi_kepmag'] = df['koi_kepmag'].fillna(df['koi_kepmag'].median())
     df['label'] = df['koi_disposition'].apply(lambda x: 1 if x == 'CONFIRMED' else 0)
-    # Friendly column names
     df.rename(columns={
         'koi_period': 'Orbital Period (days)',
         'koi_time0bk': 'Transit Time (BKJD)',
@@ -37,50 +37,6 @@ def load_data():
     return df
 
 df = load_data()
-
-# --- Sidebar Filters ---
-st.sidebar.header("Filter Candidates")
-
-# Numeric filters
-st.sidebar.subheader("Numeric Filters")
-min_period, max_period = st.sidebar.slider("Orbital Period (days)", 
-                                           float(df['Orbital Period (days)'].min()), 
-                                           float(df['Orbital Period (days)'].max()), 
-                                           (float(df['Orbital Period (days)'].min()), float(df['Orbital Period (days)'].max())))
-min_mag, max_mag = st.sidebar.slider("Kepler Magnitude", 
-                                     float(df['Kepler Mag'].min()), 
-                                     float(df['Kepler Mag'].max()), 
-                                     (float(df['Kepler Mag'].min()), float(df['Kepler Mag'].max())))
-min_transit, max_transit = st.sidebar.slider("Transit Time (BKJD)", 
-                                             float(df['Transit Time (BKJD)'].min()), 
-                                             float(df['Transit Time (BKJD)'].max()), 
-                                             (float(df['Transit Time (BKJD)'].min()), float(df['Transit Time (BKJD)'].max())))
-
-# Boolean filters
-st.sidebar.subheader("Flag Filters (Check for 1)")
-not_transit_flag = st.sidebar.checkbox("Not Transit-Like")
-stellar_eclipse_flag = st.sidebar.checkbox("Stellar Eclipse")
-centroid_offset_flag = st.sidebar.checkbox("Centroid Offset")
-ephemeris_contam_flag = st.sidebar.checkbox("Ephemeris Contamination")
-
-# Apply filters
-filtered_df = df[
-    (df['Orbital Period (days)'] >= min_period) & (df['Orbital Period (days)'] <= max_period) &
-    (df['Kepler Mag'] >= min_mag) & (df['Kepler Mag'] <= max_mag) &
-    (df['Transit Time (BKJD)'] >= min_transit) & (df['Transit Time (BKJD)'] <= max_transit)
-]
-
-if not_transit_flag:
-    filtered_df = filtered_df[filtered_df['Not Transit-Like'] == 1]
-if stellar_eclipse_flag:
-    filtered_df = filtered_df[filtered_df['Stellar Eclipse'] == 1]
-if centroid_offset_flag:
-    filtered_df = filtered_df[filtered_df['Centroid Offset'] == 1]
-if ephemeris_contam_flag:
-    filtered_df = filtered_df[filtered_df['Ephemeris Contamination'] == 1]
-
-st.subheader(f"Filtered Dataset ({filtered_df.shape[0]} rows)")
-st.dataframe(filtered_df.head(15))
 
 # --- 2. Preprocessing & Train Model ---
 num_cols = ['Orbital Period (days)', 'Transit Time (BKJD)', 'Kepler Mag']
@@ -101,39 +57,28 @@ def train_model(X_train, y_train):
     return model
 
 rf_model = train_model(X_train, y_train)
+
+# --- 3. Confusion Matrix ---
+st.subheader("Confusion Matrix")
+
 y_pred = rf_model.predict(x_test)
 cm = confusion_matrix(y_test, y_pred)
 
-# --- 3. Predictions & Top Candidates ---
-pred_probs = rf_model.predict_proba(x_val)[:, 1]
-results = x_val.copy()
-results['Predicted Probability'] = pred_probs
+fig_cm, ax_cm = plt.subplots()
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Not Confirmed', 'Confirmed'],
+            yticklabels=['Not Confirmed', 'Confirmed'])
+ax_cm.set_xlabel("Predicted")
+ax_cm.set_ylabel("Actual")
+ax_cm.set_title("Confusion Matrix")
+st.pyplot(fig_cm)
 
-top_candidates = results.sort_values('Predicted Probability', ascending=False).head(10)
-st.subheader("Top 10 Predicted Exoplanets")
+# --- 4. Classification Report ---
+st.subheader("Classification Report")
+report = classification_report(y_test, y_pred, output_dict=True)
+st.dataframe(pd.DataFrame(report).transpose())
 
-def color_probs(val):
-    if val > 0.75:
-        color = 'green'
-    elif val > 0.5:
-        color = 'orange'
-    else:
-        color = 'red'
-    return f'background-color: {color}; color: white; font-weight: bold'
-
-st.dataframe(top_candidates.style.applymap(color_probs, subset=['Predicted Probability']))
-
-# Plot probabilities
-fig1, ax1 = plt.subplots(figsize=(8,5))
-colors = sns.color_palette("coolwarm", n_colors=10)
-ax1.barh(top_candidates.index.astype(str), top_candidates['Predicted Probability'], color=colors)
-ax1.set_xlabel("Predicted Probability")
-ax1.set_ylabel("Sample Index")
-ax1.set_title("Top 10 Predicted Exoplanets")
-ax1.invert_yaxis()
-st.pyplot(fig1)
-
-# --- 4. Global Feature Importance ---
+# --- 5. Global Feature Importance ---
 perm_importance = permutation_importance(rf_model, x_val, y_val, n_repeats=10, random_state=42)
 feature_importance = pd.DataFrame({
     'Feature': x_val.columns,
@@ -141,16 +86,15 @@ feature_importance = pd.DataFrame({
 }).sort_values('Importance', ascending=False)
 
 st.subheader("Global Feature Importance")
-st.dataframe(feature_importance.style.bar(subset=['Importance'], color='lightblue'))
+st.dataframe(feature_importance)
 
-fig2, ax2 = plt.subplots(figsize=(8,5))
-colors_feat = sns.color_palette("viridis", n_colors=len(feature_importance))
-ax2.barh(feature_importance['Feature'], feature_importance['Importance'], color=colors_feat)
+fig2, ax2 = plt.subplots()
+ax2.barh(feature_importance['Feature'], feature_importance['Importance'])
 ax2.set_xlabel("Permutation Importance")
 ax2.set_title("Feature Importance")
 st.pyplot(fig2)
 
-# --- 5. User Input for Prediction ---
+# --- 6. User Input Prediction ---
 st.sidebar.header("Predict Your Exoplanet Candidate")
 
 def user_input_features():
@@ -171,13 +115,11 @@ def user_input_features():
         'Centroid Offset': centroid_offset,
         'Ephemeris Contamination': ephemeris_contamination
     }
-    features = pd.DataFrame(data, index=[0])
-    return features
+    return pd.DataFrame(data, index=[0])
 
 input_df = user_input_features()
 prob = rf_model.predict_proba(input_df)[:,1][0]
 
-# Color-coded probability
 if prob > 0.75:
     st.sidebar.success(f"High Probability! Predicted probability: {prob:.2f}")
 elif prob > 0.5:
